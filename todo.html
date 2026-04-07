@@ -15,9 +15,11 @@
       --accent: #7c6aff;
       --accent-hover: #9a8bff;
       --danger: #ff5a5a;
+      --withdrawn: #e8a030;
       --text: #e8e8f0;
       --text-muted: #888899;
       --done-text: #55556a;
+      --withdrawn-text: #6b5a30;
       --radius: 12px;
       --shadow: 0 4px 24px rgba(0,0,0,0.4);
     }
@@ -138,6 +140,7 @@
     }
     .todo-item:hover { border-color: var(--accent); }
     .todo-item.done { opacity: 0.5; }
+    .todo-item.withdrawn { opacity: 0.4; border-style: dashed; }
 
     @keyframes slide-in {
       from { opacity: 0; transform: translateY(-8px); }
@@ -189,6 +192,11 @@
       color: var(--done-text);
       text-decoration: line-through;
     }
+    .todo-item.withdrawn .todo-text {
+      color: var(--withdrawn-text);
+      text-decoration: line-through;
+      font-style: italic;
+    }
     .todo-text:focus { color: var(--text); }
 
     /* Priority dot */
@@ -206,20 +214,23 @@
     .priority[data-p="1"] { background: #ffb74d; }
     .priority[data-p="2"] { background: #ff5a5a; }
 
-    /* Delete */
-    .btn-del {
+    /* Withdraw / Delete */
+    .btn-withdraw, .btn-del {
       background: transparent;
       border: none;
       color: var(--text-muted);
       cursor: pointer;
       flex-shrink: 0;
-      font-size: 1rem;
+      font-size: 0.9rem;
       line-height: 1;
       opacity: 0;
       padding: 2px 4px;
       transition: color 0.15s, opacity 0.15s;
     }
+    .todo-item:hover .btn-withdraw,
     .todo-item:hover .btn-del { opacity: 1; }
+    .todo-item.withdrawn .btn-withdraw { opacity: 0.6; color: var(--withdrawn); }
+    .btn-withdraw:hover { color: var(--withdrawn); }
     .btn-del:hover { color: var(--danger); }
 
     /* Empty state */
@@ -262,6 +273,7 @@
     <button class="filter-btn active" data-filter="all">すべて</button>
     <button class="filter-btn" data-filter="active">未完了</button>
     <button class="filter-btn" data-filter="done">完了</button>
+    <button class="filter-btn" data-filter="withdrawn">取り下げ</button>
     <span class="stats" id="stats"></span>
   </div>
 
@@ -279,8 +291,14 @@
   let filter = 'all';
 
   function load() {
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
-    catch { return []; }
+    try {
+      const data = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+      // migrate old format: done:boolean → status string
+      return data.map(t => {
+        if (!t.status) t.status = t.done ? 'done' : 'active';
+        return t;
+      });
+    } catch { return []; }
   }
 
   function save() {
@@ -288,7 +306,7 @@
   }
 
   function newTodo(text) {
-    return { id: Date.now() + Math.random(), text, done: false, priority: 0 };
+    return { id: Date.now() + Math.random(), text, status: 'active', priority: 0 };
   }
 
   function addTodo() {
@@ -303,7 +321,16 @@
 
   function toggleDone(id) {
     const t = todos.find(t => t.id === id);
-    if (t) { t.done = !t.done; save(); render(); }
+    if (!t) return;
+    t.status = t.status === 'done' ? 'active' : 'done';
+    save(); render();
+  }
+
+  function toggleWithdrawn(id) {
+    const t = todos.find(t => t.id === id);
+    if (!t) return;
+    t.status = t.status === 'withdrawn' ? 'active' : 'withdrawn';
+    save(); render();
   }
 
   function deleteTodo(id) {
@@ -323,14 +350,15 @@
   }
 
   function clearDone() {
-    todos = todos.filter(t => !t.done);
+    todos = todos.filter(t => t.status !== 'done');
     save();
     render();
   }
 
   function filtered() {
-    if (filter === 'active') return todos.filter(t => !t.done);
-    if (filter === 'done')   return todos.filter(t => t.done);
+    if (filter === 'active')    return todos.filter(t => t.status === 'active');
+    if (filter === 'done')      return todos.filter(t => t.status === 'done');
+    if (filter === 'withdrawn') return todos.filter(t => t.status === 'withdrawn');
     return todos;
   }
 
@@ -339,14 +367,19 @@
     const items = filtered();
 
     // Stats
-    const total  = todos.length;
-    const doneN  = todos.filter(t => t.done).length;
-    document.getElementById('stats').textContent =
-      total ? `${doneN} / ${total} 完了` : '';
+    const total      = todos.length;
+    const doneN      = todos.filter(t => t.status === 'done').length;
+    const withdrawnN = todos.filter(t => t.status === 'withdrawn').length;
+    let statsText = '';
+    if (total) {
+      statsText = `${doneN} / ${total} 完了`;
+      if (withdrawnN) statsText += ` · ${withdrawnN} 取り下げ`;
+    }
+    document.getElementById('stats').textContent = statsText;
 
     // Clear button
     const clearBtn = document.getElementById('btn-clear');
-    clearBtn.disabled = !todos.some(t => t.done);
+    clearBtn.disabled = !todos.some(t => t.status === 'done');
 
     // Empty state
     if (!items.length) {
@@ -357,14 +390,15 @@
     list.innerHTML = '';
     items.forEach(todo => {
       const li = document.createElement('li');
-      li.className = 'todo-item' + (todo.done ? ' done' : '');
+      const statusClass = todo.status === 'done' ? ' done' : todo.status === 'withdrawn' ? ' withdrawn' : '';
+      li.className = 'todo-item' + statusClass;
       li.dataset.id = todo.id;
 
       // Checkbox
       const chk = document.createElement('input');
       chk.type = 'checkbox';
       chk.className = 'check';
-      chk.checked = todo.done;
+      chk.checked = todo.status === 'done';
       chk.addEventListener('change', () => toggleDone(todo.id));
 
       // Priority dot
@@ -382,6 +416,13 @@
       txt.addEventListener('change', e => updateText(todo.id, e.target.value));
       txt.addEventListener('keydown', e => { if (e.key === 'Enter') txt.blur(); });
 
+      // Withdraw
+      const wdr = document.createElement('button');
+      wdr.className = 'btn-withdraw';
+      wdr.textContent = '⊘';
+      wdr.title = todo.status === 'withdrawn' ? '取り下げを取り消す' : '取り下げ';
+      wdr.addEventListener('click', () => toggleWithdrawn(todo.id));
+
       // Delete
       const del = document.createElement('button');
       del.className = 'btn-del';
@@ -389,7 +430,7 @@
       del.title = '削除';
       del.addEventListener('click', () => deleteTodo(todo.id));
 
-      li.append(dot, chk, txt, del);
+      li.append(dot, chk, txt, wdr, del);
       list.appendChild(li);
     });
   }
